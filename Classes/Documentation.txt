@@ -1,0 +1,39 @@
+mdsm.init(config) Schema:
+		{
+			"title" : "config",
+			"description" : "MDSM Initialization Configuration Object",
+			"type" : "object",
+			"properties" : {
+				"port" : {
+					"description" : "The port number on which the server will listen for request",
+					"type" : integer
+				},
+				"url":{
+					"description" : "The root URL that will prefix all endpoints",
+					"type" : "string"
+				},
+				"https":{
+					"description":"Configuration for HTTPS (Optional)",
+					"type":"object",
+					"properties": {
+						"httpsEnabled" : {
+							"description": "Flags whether HTTPS should be used or not",
+							"type" : "boolean"
+						},
+						"key" : {
+							"description": "SSL Key",
+							"type" : "string"
+						},
+						"cert" : {
+							"description": "SSL certificate",
+							"type" : "string"
+						},
+						"ca" : {
+							"description": "SSL Certificate Authority (Optional)",
+							"type" : "string"
+						},
+					},
+					"required" : ["httpsEnabled", "key", "cert"]
+				}
+			}
+		}
