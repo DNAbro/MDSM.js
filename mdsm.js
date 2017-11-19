@@ -1,3 +1,6 @@
+const http = require("http");
+const https = require("https");
+
 const Client = require("./Classes/Client.js");
 const ClientClass = require("./Classes/ClientClass.js");
 const Session = require("./Classes/Session.js");
@@ -18,15 +21,37 @@ let mdsm = function(){
 	let endpoints = [];			// Will contain a list of valid endpoints
 	let clientClasses = [];		// Will contain a list of valid client classes
 
+	let requestListener = function(req,res){
+		console.log(req.url);
+		res.end();
+	}
+
 	/* Initializes an instance based on the given configuration. See documentation for "config" schema */
 	let init = function(config){
 		port = config.port;
-		url = config.url;
+		rootUrl = trimRootUtl(config.url);	// Remove any '/' characters at the beginning or end of the URL
 		if(config.https){
 			httpsConfig.httpsEnabled = true;
 			httpsConfig.key = config.https.key;
 			httpsConfig.cert = config.https.cert;
 			httpsConfig.ca = config.https.ca;
+			let server = https.createServer({
+				'key': httpsConfig.key,
+				'cert': httpsConfig.cert,
+				'ca': httpsConfig.ca
+			},requestListener);
+			server.listen({
+				'port': port,
+				'host': 'localhost',
+			});
+
+		} else {
+			let server = http.createServer(requestListener);
+			server.listen({
+				'port': port,
+				'host': 'localhost',
+			});
+			console.log('Listening on port ' + port);
 		}
 	}
 
@@ -37,14 +62,24 @@ let mdsm = function(){
 
 	/* Create a new endpoint */
 	let addEndpoint = function(newEndpointInfo){
-		endpoints.insert(newEndpointInfo.url);
+		endpoints.push(newEndpointInfo.url);
 		if(!(clientClasses.includes(newEndpointInfo.allowedClassTypes))){
-			clientClasses.insert(newEndpointInfo.allowedClassTypes);
+			clientClasses.push(newEndpointInfo.allowedClassTypes);
 		}
 	}
 
 	let processRequest = function(req){
 
+	}
+
+	/* If the URL starts or begins with slashes, trims it to remove them. */
+	function trimRootUtl(url){
+		if(url.charAt(0) === '/'){
+			url = url.substring(0);
+		}
+		if(url.charAt(url.length - 1) === '/'){
+			url = url.substring(0,url.length - 1);
+		}
 	}
 
 	/* Allows the framework to be used as Express.js middleware. Usage:

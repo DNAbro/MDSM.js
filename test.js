@@ -8,8 +8,9 @@ mdsm.init({
 
 let endpointURL = 'doSomething1';
 let allowedClassTypes = [
-	mdsm.createClientClass('display');
+	mdsm.createClientClass('display')
 ];
+
 mdsm.addEndpoint({
 	url: endpointURL,
 	allowedClassTypes: allowedClassTypes
