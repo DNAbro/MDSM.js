@@ -28,6 +28,10 @@ mdsm.init(config) Schema:
 							"description": "SSL certificate",
 							"type" : "string"
 						},
+						"passphrase" : {
+							"description": "SSL passphrase",
+							"type" : "string"
+						},
 						"ca" : {
 							"description": "SSL Certificate Authority (Optional)",
 							"type" : "string"

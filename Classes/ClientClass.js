@@ -1,6 +1,6 @@
 class ClientClass{
-	constructor(clientClassID){
-		this.clientClassID = clientClassID;
+	constructor(classID){
+		this.classID = classID;
 	}
 }
 

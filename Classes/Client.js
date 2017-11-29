@@ -4,14 +4,6 @@ class Client{
 		this.clientClass = clientClass;
 		this.parentSession = parentSession;
 	}
-
-	get clientID(){
-		return this.clientID;
-	}
-
-	get clientClass(){
-		return this.clientClass;
-	}
 }
 
 module.exports = Client;
