@@ -5,7 +5,7 @@ class Session{
 	constructor(newSessionInfo){
 		/* Set the session ID */
 		this.sessionID = newSessionInfo.sessionID;
-		this.expirtDate = newSessionInfo.expiryDate;
+		this.expiryDate = newSessionInfo.expiryDate;
 
 		/* Create a unique session secret for crypto services */
 		this.sessionSecret = crypto.randomFillSync(Buffer.alloc(32), 0, 32).toString('base64');
@@ -18,25 +18,24 @@ class Session{
 		this.expiryDate += additionalLifeMs;
 	}
 
-	selfDestruct(){
-		console.log('Session ' + this.sessionID + ' has expired.');
-		/* Get the difference in ms between the current time and the expiryDate of the session */
+	attemptSelfDestruct(){
+		console.log('Attempting to delete session [' + this.sessionID + ']');
+		console.log('Its expiry date is ' + (this.expiryDate) + ' and the current time is ' + (Date.now()));
+		/* Get the difference in ms between expiry date and the current time */
 		let true_ttl = this.expiryDate - Date.now();
 		console.log(`true_ttl: ${true_ttl}`);
-		/* If the current time is greater than the expiry date (meaning the session was
-		 * not renewed to extend its ttl), delete the session. */
+
+		/* If the ttl is not positive (meaning the expiry date is smaller than the
+		 * current date), delete the session. */
 		if(true_ttl <= 0){
 			console.log('Deleting session ' + this.sessionID);
-			delete this;
+			delete this;	// Delete the Session object
+			return true;	// Signal that the deletion was successful
 		}
 
-		/* Otherwise, set a new timeout to try again */
-		else {
-			setTimeout(
-				()=>{this.selfDestruct()},	// The selfDestruct function will be called in {ttl} milliseconds
-				true_ttl
-			);
-		}
+		/* Otherwise, return false to indicate that the session should not be deleted yet */
+		else return false;
+
 	}
 
 	addClient(){
