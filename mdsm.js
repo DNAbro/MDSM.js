@@ -16,39 +16,33 @@ let mdsm = function(){
 	let clientClasses = [];		// Will contain a list of valid client classes
 
 	function findSession(sessionCookie){
-		// let unencrypted = decrypt(sessionCookie.mdsm);
-		return sessionCookie;
+		// console.log('Finding session based on this (encrypted) cookie:');
+		// console.log('[' + typeof sessionCookie + ']\"' + sessionCookie + '\"');
+		let unencrypted = decrypt(sessionCookie);
+		// console.log('Which decrypts to:');
+		// console.log('[' + typeof unencrypted + ']\"' +unencrypted);
+		let sessionDataObject = JSON.parse(unencrypted);
+		// console.log('Session data object: (' + typeof sessionDataObject+ ')');
+		// console.log(sessionDataObject);
+		for(var i = 0; i < sessions.length; i++){
+			if(sessions[i].sessionID === sessionDataObject.sessionID){
+				// console.log('Found matching session!');
+				// console.log(sessions[i]);
+				return sessions[i];
+			}
+		}
+		return null;
 	}
 
-	sessions.push(new Session('Session 1'));
 	let requestListener = function(req,res){
-		// let session = findSession((req.headers.cookie));
-		// console.log(req.headers.cookie);
-
-		let cookieList = parseCookies(req);
-		console.log(cookieList);
-		const ip = res.socket.remoteAddress;
-  		const port = res.socket.remotePort;
-
-		//let testSession = new Session('1234');
-		let cookie = encrypt('Super secret stuff');
-		res.setHeader('Set-Cookie',[
-			`mdsm=${cookie};`,
-			`data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt;`,
-			// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
-			]
-		);
-
-  		res.end(`Your IP address is ${ip} and your source port is ${port}.`);
-
+		processRequest(req,res);
 	}
-
-	function parseCookies (request) {
+	/* Takes an HTTP request object and returns a list of its cookies */
+	function getCookieListFromReq(request) {
 		var list = {},
-		rc = request.headers.cookie;
-
-		rc && rc.split(';').forEach(function( cookie ) {
-			var parts = cookie.split('=');
+		cookieString = request.headers.cookie;
+		cookieString && cookieString.split(';').forEach(function( cookie ) {
+			let parts = cookie.split('=');
 			list[parts.shift().trim()] = decodeURI(parts.join('='));
 		});
 
@@ -80,6 +74,80 @@ let mdsm = function(){
 		}
 	}
 
+	let processRequest = function(req,res){
+		console.log('================= Parsing new request =====================');
+		console.log('Status of sessions array:');
+		console.log(sessions);
+
+		console.log('Getting cookie list.');
+		let cookieList = getCookieListFromReq(req);
+		console.log('Cookie list: ');
+		console.log(cookieList);
+
+		/* If the request already has an MDSM cookie */
+		if(cookieList['mdsm']){
+			/* Route it to the appropriate session */
+			let matchingSession = findSession(cookieList['mdsm']);
+			/* If the session is valid */
+			if(matchingSession){
+				console.log(matchingSession.sessionID);
+				let sessID = matchingSession.sessionID;
+				res.end('Hello, person from session with session ID ' + sessID);
+			}
+
+			/* If the session is invalid */
+			else {
+				res.setHeader('Set-Cookie',[
+					`mdsm=; HttpOnly; Max-Age=0`,
+					// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; HttpOnly; Max-Age=60`,
+					// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
+					]
+				);
+				res.end('MDSM cookie was valid, but session does not exist');
+			}
+
+		}
+
+		/* If the request does not have an MDSM cookie */
+		else {
+			let newSessionInfo = {};
+			let newSesh = createSession(newSessionInfo);
+			let plainTextCookie = {
+				'sessionID' : newSesh.sessionID
+			};
+			let cookie = encrypt(JSON.stringify(plainTextCookie));
+			res.setHeader('Set-Cookie',[
+				`mdsm=${cookie}; HttpOnly; Max-Age=120`,
+				// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; HttpOnly; Max-Age=60`,
+				// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
+				]
+			);
+			res.end('Hello new person');
+		}
+
+		// const ip = res.socket.remoteAddress;
+		// const port = res.socket.remotePort;
+		// res.end(`Your IP address is ${ip} and your source port is ${port}.`);
+	}
+
+	let createSession = function(newSessionInfo){
+		let newSesh = new Session({
+			sessionID: crypto.randomFillSync(Buffer.alloc(32), 0, 32).toString('hex'),
+			expiryDate: Date.now() + newSessionInfo.time_to_live;
+		});
+
+		/* Set a callback to delete the session at expiry time. Self-destruction is not
+		 * guaranteed since (by design), the session may have its expiryDate extended before
+		 * the callback is executed. */
+		setTimeout(
+			()=>{this.attemptSelfDestruct()},
+			newSesh.time_to_live
+		);
+
+		sessions.push(newSesh);
+		return newSesh;
+	}
+
 	let createClientClass = function(clientClassID){
 		let newClientClass = new ClientClass(clientClassID);
 		return newClientClass;
@@ -98,10 +166,6 @@ let mdsm = function(){
 		}
 	}
 
-	let processRequest = function(req){
-
-	}
-
 	/* If the URL starts or begins with slashes, trims it to remove them. */
 	function trimURL(url){
 		let trimmedUrl = url;
@@ -114,6 +178,7 @@ let mdsm = function(){
 		return trimmedUrl;
 	}
 
+	/* Performs AES-256 encryption on a plaintext using a randomly-generated key */
 	function encrypt(plaintext){
 		const encipher = crypto.createCipher('aes256', secret);
 		let encrypted = encipher.update(plaintext, 'utf8', 'base64');
@@ -121,11 +186,20 @@ let mdsm = function(){
 		return encrypted;
 	}
 
-	function decrypt(encryptedData){
+	/* Decrypts a ciphertext generated by the above encrypt function.
+	 * Returns null if the ciphertext is invalid */
+	function decrypt(ciphertext){
+		// console.log(`Decrypting ciphertext: ${ciphertext}`);
 		const decipher = crypto.createDecipher('aes256', secret);
-		let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
-		decrypted += decipher.final('utf8');
-		return decrypted;
+		try{
+			let decrypted = decipher.update(ciphertext, 'base64', 'utf8');
+			decrypted += decipher.final('utf8');
+			// console.log('Decrypted: ' + decrypted);
+			return decrypted;
+		} catch (error){
+			console.log('MDSM Error:\n' + error + error.stack);
+			return null;
+		}
 	}
 
 	return {
