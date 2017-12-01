@@ -1,19 +1,34 @@
+/* Node.js core libraries for HTTP/S and Crypto services */
 const http = require("http");
 const https = require("https");
 const crypto = require('crypto');
 
+/* Class to manage sessions */
 const Session = require("./Classes/Session.js");
 
+/* MDSM uses a revealing module pattern to expose a public API. It's a function with
+ * internal variables and functions that returns an object with references to the
+ * public interface. This ensures good encapsulation. */
 let mdsm = function(){
-	let MDSM_CONFIG = {
-		mode: null,	// Valid values: {'Port','Middleware'}
-		port: null,	// If on port mode, the port number being listened on. Otherwise null.
 
-		/* For crypto services */
+	/* Configuration options: MDSM can run either in "Port" mode or in "Middleware" mode.
+	 * Port mode opens up an HTTP server on a specified port and handles HTTP calls to
+	 * that port directly. Middleware mode exposes the processRequest() method through
+	 * the public interface, allowing the framework to be used as middleware for existing
+	 * projects, particularly ones using the Express.js web application framework. */
+	let MDSM_CONFIG = {
+		mode: null,	// To be set upon initialization [init()]. Valid values: {'Port','Middleware'}
+		port: null,	// Also to be set upon init(). HTTP/s server will listen on this port if on port mode.
+
+		/* Cookies are dynamically encrypted and decrypted. This secret is a unique 256-bit
+		 * key to be used for these purposes. */
 		secret: crypto.randomFillSync(Buffer.alloc(256), 0, 256).toString('base64'),
 	};
 
+	/* Lists of Session instances. See Sessions.js class for schema. */
 	let sessions = [];			// Will be populated with sessions as they are initialized
+
+	/* List of Endpoints. See Documentation for object schema. */
 	let endpoints = [];			// Will contain a list of valid endpoints
 
 	/* Initializes an instance of MDSM in either 'Port' mode (which listens for requests
@@ -38,11 +53,14 @@ let mdsm = function(){
 		});
 	}
 
+	/* This requestListener is used as a callback function in Port mode. It simply calls
+	 * processRequest() on incoming requests. */
 	let requestListener = function(req,res,next){
 		processRequest(req,res,next);
 	}
 
-	/* Listens for requests on a specified port. See documentation for "config" schema */
+	/* Configures HTTP/s server when using Port mode.
+	 * Listens for requests on a specified port. See documentation for "config" schema */
 	let listen = function(config){
 		/* If HTTPS settings were specified, configure an HTTPS server. */
 		if(config.https){
@@ -51,8 +69,8 @@ let mdsm = function(){
 				let server = https.createServer({
 					'key': config.https.key,
 					'cert': config.https.cert,
-					'passphrase': config.https.passphrase,
-					'ca': config.https.ca
+					'passphrase': config.https.passphrase,	// Optional. May be null.
+					'ca': config.https.ca						// Optional. May be null.
 				},requestListener);
 				server.listen({
 					'port': MDSM_CONFIG.port,
@@ -64,6 +82,7 @@ let mdsm = function(){
 				console.log(error.stack);
 			}
 		}
+
 		/* If no HTTPS settings were specified, default to an HTTP server. */
 		else {
 			try{
@@ -79,6 +98,9 @@ let mdsm = function(){
 		}
 	}
 
+	/* The true implementation of the public processRequest() function. Only calls
+	 * processRequest() if MDSM was configured to run in Middleware mode.
+	 * it throws an error.*/
 	let processRequestAsMiddleware = function(req,res,next){
 		if(MDSM_CONFIG.mode != 'Middleware'){
 			next({
@@ -91,64 +113,55 @@ let mdsm = function(){
 			processRequest(req,res,next);
 		}
 	}
+
 	/* Process an incoming request. This function may be called by the request listener,
 	 * if listening on a port, or manually through the external API. */
 	let processRequest = function(req,res,next){
-		// console.log('================= Parsing new request =====================');
-		// console.log('Status of sessions array:');
-		// console.log(sessions);
-
 		let reqUrl = trimURL(req.url);	//Get a trimmed version of the URL
-		// console.log('Processing request to ' + trimURL(req.url));
 
-		/* check whether the request was for a valid endpoint URL. If it wasn't, call the
-		 * error callback.*/
+		/* If the url is not a valid endpoint, use the "next" parameter to
+		 * to throw an error. */
 		if(!(isValidEndpoint(reqUrl))){
 			next({
 				errorCode: 3,	// Error code 3: Invalid endpoint URL
 				errorText: 'Invalid endpoint'
 			});
 		}
+
 		/* If the request was for a valid URL, continue processing the request */
 		else {
-			// console.log('Getting cookie list.');
-
-			/* Get an object containing cookie-value pairs */
+			/* Get an object containing cookie-value pairs. If there are no cookies,
+			 * the list may be empty. */
 			let cookieList = getCookieListFromReq(req);
-
-			// console.log('Cookie list: ');
-			// console.log(cookieList);
 
 			/* If the request has an MDSM cookie */
 			if(cookieList['mdsm']){
-				/* Try and get the session associated with the cookie */
+				/* Look for a session associated with the cookie by passing the MDSM cookie
+				 * to the findSession() function, which will attempt to decrypt it and return t
+				 * the matching session. If no session is found or the cookie cannot be decrypted,
+				 * the function will return null. */
 				let match = findSession(cookieList['mdsm']);
 
-				/* If the session is valid, pass it to the session and let if figure out what to do.*/
+				/* If a session exists */
 				if(match){
-					// console.log(matchingSession.sessionID);
-					// let sessID = matchingSession.sessionID;
-					// res.end('Hello, person from session with session ID ' + sessID);
+					/* Tell the session to process the request. Also append an unencrypted version
+					 * of the MDSM cookie as the third parameter */
 					match.session.processRequest(req,res,match.mdsmCookie,next);
 				}
 
-				/* If the session is invalid, expire the bad cookie and pass an error to the caller through the next() callback */
+				/* If no valid session could be ascertained from the cookie (either because it could
+				 * not be decrypted, or because the session does not exist), expire the bad cookie
+				 * and pass an error to the caller through the next() callback */
 				else {
 					next({
 						errorCode: 1,	// Error code 1: Invalid MDSM cookie
-						errorText: 'MDSM Error: Invalid MDSM cookie',
+						errorText: 'MDSM Error: Invalid MDSM cookie. Could not find matching session.',
 					});
-					res.setHeader('Set-Cookie',[
-						`mdsm=; HttpOnly; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
-						// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; HttpOnly; Max-Age=60`,
-						// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
-						]
-					);
-					res.end('MDSM cookie was valid, but session does not exist. Your bad cookie has been expired.');
+
 				}
 			}
 
-			/* If the request does not have an MDSM cookie, ignore it and let the caller figure out what to do next.*/
+			/* If the request does not have an MDSM cookie... */
 			else {
 				/* If on port mode, send an HTTP 400 response */
 				if(MDSM_CONFIG.mode === 'Port'){
@@ -167,13 +180,14 @@ let mdsm = function(){
 		}
 	}
 
-	/* Checks the list of endpoints to see whether a given URL pertains to a valid endpoint */
+	/* Checks the list of endpoints to see whether a given URL pertains to a valid endpoint.*/
 	function isValidEndpoint(url){
-		/* Get a subset of the endpoints array for which the url matches the given url */
+		/* Get a subset of the endpoints array for which the url matches the given url (trimmed) */
 		let matchingEndpoints = endpoints.filter((ep)=>{
-			return ep.url === url;
+			return ep.url === trimURL(url);
 		});
 
+		/* If the subset is not an empty set, return true. Otherwise return false. */
 		return (matchingEndpoints.length != 0);
 	}
 
@@ -194,88 +208,59 @@ let mdsm = function(){
 	 * the decrypted cookie and a reference to the Session object, or null if no matching
 	 * session is found. */
 	function findSession(sessionCookie){
-		// console.log('Finding session based on this (encrypted) cookie:');
-		// console.log('[' + typeof sessionCookie + ']\"' + sessionCookie + '\"');
-		// console.log('Which decrypts to:');
 		try{
+			/* Decrypt the session cookie string */
 			let unencrypted = decrypt(sessionCookie);
-			// console.log('[' + typeof unencrypted + ']\"' +unencrypted);
+
+			/* Parse it into an object */
 			let sessionDataObject = JSON.parse(unencrypted);
-			// console.log('Session data object: (' + typeof sessionDataObject+ ')');
-			// console.log(sessionDataObject);
+
+			/* Get a subset of the sessions list with elements whose sessionIDs match
+			 * the ones in the MDSM cookie. */
 			let filteredSessionList = sessions.filter((s)=>{
 				return s.sessionID === sessionDataObject.sessionID;
 			});
+
+			/* IF the subset is of positive length, a match was found. Return an object
+			 * with the unencrypted cookie and a reference to the matching Session */
 			if(filteredSessionList.length > 0){
 				return {
 					mdsmCookie: unencrypted,
 					session: filteredSessionList[0]
 				};
-			} else {
-				return null;
 			}
 
-			// for(var i = 0; i < sessions.length; i++){
-			// 	if(sessions[i].sessionID === sessionDataObject.sessionID){
-			// 		// console.log('Found matching session!');
-			// 		// console.log(sessions[i]);
-			// 		return {
-			// 			mdsmCookie: unencrypted,
-			// 			session: sessions[i]
-			// 		};
-			// 	}
-			// }
+			/* If no match was found, return null */
+			else {
+				return null;
+			}
 		}
 
-		/* The cookie could not be decrypted.  */
+		/* If the cookie could not be decrypted:  */
 		catch(error){
 			console.log(`MDSM error: Unable to decrypt MDSM cookie:\n\t[${sessionCookie}].\n` +
 							`It may have been generated by a previous instance of MDSM.`
 			);
 			return null;
-			// console.log(error.stack);
 		}
 
 		/* Return null if no matching session could be discerned */
 		return null;
 	}
 
-	/* Create a session using a configuration object:
-			{
-				"title" : "newSessionInfo",
-				"description" : "MDSM Session Configuration Object",
-				"type" : "object",
-				"properties" : {
-					"sessionID":{
-						"description" : "An ostensibly unique identifier for the session. Optional: If not provided, a 32-bit hex-encoded random value will be used.",
-						"type" : "string"
-					},
-					"timeToLive":{
-						"description": "The valid length of the session in milliseconds. Note that sessions may be extended beyond their initial TTL. See Session documentation.",
-						"type": "number"
-					},
-					"sessionData":{
-						"description": "An object containing arbitrary data",
-						"type": "object"
-					}
-				}
-			}
-	*/
+	/* Create a session using a configuration object. See Documentation for schema. */
 	let createSession = function(newSessionInfo){
-		// console.log('Creating a new session!');
 		/* If a session ID wasn't specified, create a random 32-bit hex-encoded ID */
 		if(!(newSessionInfo.sessionID)){
-			// console.log('No session ID was specified, so the new session was granted the following ID:');
 			newSessionInfo.sessionID = crypto.randomFillSync(Buffer.alloc(32), 0, 32).toString('hex');
-			// console.log(newSessionInfo.sessionID);
 		};
 
 		/* If no session TTL was specified, default to 0. */
 		if(!(newSessionInfo)){
-			// console.log('No TTL was specified, so the new session will expire in 0 seconds');
 			newSessionInfo.timeToLive = 0;
 		}
 
+		/* If no sessionData was provided, make sure it's null rather than undefined. */
 		if(!(newSessionInfo.sessionData)){
 			newSessionInfo.sessionData = null;
 		}
@@ -285,18 +270,13 @@ let mdsm = function(){
 			sessionID: newSessionInfo.sessionID,
 			expiryDate: Date.now() + newSessionInfo.timeToLive,
 			sessionData: newSessionInfo.sessionData,
-			validEndpoints: endpoints,
+			validEndpoints: endpoints,		// Give the session a reference to the Endpoints list
 		});
-
-		// console.log('New session was successfully created:');
-		// console.log(newSesh);
-		// console.log('Pushing session to the sessions array.');
 
 		/* Add the session to the sessions array */
 		sessions.push(newSesh);
 
-		// console.log('Current state of the sessions array:');
-		// console.log(sessions);
+		/* The following function will be set on a timer to be called once the session is supposed to expire. */
 
 		/* Tells the session object to delete itself. If it does, the session truly expired,
 		 * so it is deleted from the sessions array. If it does not delete itself, that means
@@ -306,11 +286,11 @@ let mdsm = function(){
 			/* Attempt to delete the session object (deletion will only succeed if the session
 			 * has truly reached its expiryDate, without being renewed to extend its life) */
 			let wasDestroyed = session.attemptSelfDestruct();
+
 			/* If the session was expired and was successfully deleted, remove it from the sessions array */
 			if(wasDestroyed){
 				/* Find the index of the session object in the sessions array, and delete it */
 				sessions.splice(sessions.indexOf(session),1);	//Delete 1 object at the index of the session
-				console.log(`Session ${session.sessionID} was destroyed`);
 				session = null;	// Set the session object equal to null to ensure the garbage collector catches it
 			}
 
@@ -323,7 +303,7 @@ let mdsm = function(){
 			}
 		}
 
-		/* Set a callback to delete the session at expiry time. Self-destruction is not
+		/* Set an initial callback to delete the session at expiry time. Self-destruction is not
 		 * guaranteed since (by design), the session may have its expiryDate extended before
 		 * the callback is executed. */
 		setTimeout(
@@ -331,10 +311,11 @@ let mdsm = function(){
 			newSessionInfo.timeToLive	// To be called after the session's TTL has transpired
 		);
 
+		/* Return a reference to the new Session object */
 		return newSesh;
 	}
 
-	/* Extend the life of a session by a number of milliseconds */
+	/* Extend the life of a session by a specified number of milliseconds */
 	let renewSession = function(sessionID, extraTimeInMs){
 		/* Find the session with the given sessionID */
 		let session = sessions.filter((s)=>{
@@ -345,10 +326,18 @@ let mdsm = function(){
 		session.extendSessionLife(extraTimeInMs);
 	}
 
-	/* Add a client based on info passed in */
+	/* Add a client based on info passed in. See documentation for newClientInfo schema. */
 	let addClient = function(newClientInfo){
 		/* get the session from the newClientinfo */
 		let session = newClientInfo.session;
+
+		/* If Session was passed in as a sessionID instead of a Session object, get the
+		 * appropriate object from the list of sessions. */
+		if(!(typeof session === 'object')){
+			session = sessions.filter((s)=>{
+				return s.sessionID === sessionDataObject.sessionID;
+			})[0];
+		}
 
 		/* Tell the session to create a new client, which returns a client cookie */
 		let clientCookie = session.addClient({
@@ -360,7 +349,8 @@ let mdsm = function(){
 		return encrypt(clientCookie);
 	}
 
-	/* If the URL starts or begins with slashes, trims it to remove them. */
+	/* If the URL starts or begins with slashes, trims it to remove them. For consistency
+	 * in adding and comparing endpoint URLs. */
 	function trimURL(url){
 		let trimmedUrl = url;
 		if(trimmedUrl.charAt(0) === '/'){
@@ -372,7 +362,8 @@ let mdsm = function(){
 		return trimmedUrl;
 	}
 
-	/* Performs AES-256 encryption on a plaintext using a randomly-generated key */
+	/* Performs AES-256 encryption on a plaintext using a randomly-generated key
+	 * unique to each instance of MDSM */
 	function encrypt(plaintext){
 		const encipher = crypto.createCipher('aes256', MDSM_CONFIG.secret);
 		let encrypted = encipher.update(plaintext, 'utf8', 'base64');
@@ -403,11 +394,13 @@ let mdsm = function(){
 		renewSession: renewSession,
 		addClient: addClient,
 
-		/* If in middleware mode, expose the processRequest function. */
+		/* Expose processRequest() via an alias that acts as a gatekeeper. */
 		processRequest: processRequestAsMiddleware,
 	};
 
+	/* Return the external API */
 	return externalAPI;
 }
 
+/* Execute mdsm() and return that as the module export. */
 module.exports = mdsm();

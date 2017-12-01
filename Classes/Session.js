@@ -3,30 +3,20 @@ const Client = require("./Client.js");
 
 class Session{
 	constructor(newSessionInfo){
-		/* Set the session ID */
 		this.sessionID = newSessionInfo.sessionID;
 		this.expiryDate = newSessionInfo.expiryDate;
 		this.clientList = [];
 		this.validEndpoints = newSessionInfo.validEndpoints;
 		this.sessionData = newSessionInfo.sessionData;
-
-		/* Create a unique session secret for crypto services */
-		this.sessionSecret = crypto.randomFillSync(Buffer.alloc(32), 0, 32).toString('base64');
 	}
 
-	/* Add a client */
+	/* Add a client to the clientList */
 	addClient(newClientData){
-		// console.log('Creating new client with clientData:');
-		// console.log(newClientData);
-		// let newClient = new Client(crypto.randomFillSync(Buffer.alloc(32), 0, 32).toString('hex'));
 		let newClient = new Client({
 			clientID: crypto.randomFillSync(Buffer.alloc(32), 0, 32).toString('hex'),
 			clientClass: newClientData.clientClass,
 			clientData: newClientData.clientData,
 		});
-
-		// console.log('Created new client:');
-		// console.log(newClient);
 
 		this.clientList.push(newClient);
 
@@ -76,16 +66,12 @@ class Session{
 
 	/* Destroys the current session, but only if the expiry date is in the past. */
 	attemptSelfDestruct(){
-		// console.log('Attempting to delete session [' + this.sessionID + ']');
-		// console.log('Its expiry date is ' + (this.expiryDate) + ' and the current time is ' + (Date.now()));
 		/* Get the difference in ms between expiry date and the current time */
 		let true_ttl = this.expiryDate - Date.now();
-		// console.log(`true_ttl: ${true_ttl}`);
 
 		/* If the ttl is not positive (meaning the expiry date is smaller than the
 		 * current date), delete the session. */
 		if(true_ttl <= 0){
-			// console.log('Deleting session ' + this.sessionID);
 			delete this;	// Delete the Session object
 			return true;	// Signal that the deletion was successful
 		}
@@ -104,20 +90,6 @@ class Session{
 			trimmedUrl = trimmedUrl.substring(0,trimmedUrl.length - 1);
 		}
 		return trimmedUrl;
-	}
-
-	encrypt(data){
-		this.cipher = crypto.createCipher('aes256', this.sessionSecret);
-		let encrypted = this.cipher.update(data, 'utf8', 'hex');
-		encrypted += this.cipher.final('hex');
-		return encrypted;
-	}
-
-	decrypt(encryptedData){
-		this.decipher = crypto.createDecipher('aes256', this.sessionSecret);
-		let decrypted = this.decipher.update(encryptedData, 'hex', 'utf8');
-		decrypted = this.decipher.final('utf8');
-		return decrypted;
 	}
 }
 

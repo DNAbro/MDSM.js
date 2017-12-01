@@ -20,6 +20,8 @@ mdsm.init({
 			allowedClassTypes: ['class_A'],
 			handler: function(sessionData,clientData,request,response,mdsmCookie){
 				console.log('Handling doSomething1');
+				console.log(sessionData);
+				console.log(clientData);
 			}
 		},
 		{
@@ -44,6 +46,7 @@ let processRequest = function(req,res){
 				let newSessionInfo = {
 					sessionID: null,		// Don't specify. Let createSession() generate it.
 					timeToLive: 10000,	// 10 second session length
+					sessionData: {'bar':'baz'}
 				};
 				let newSesh = mdsm.createSession(newSessionInfo);
 
@@ -55,15 +58,16 @@ let processRequest = function(req,res){
 
 				res.setHeader('Set-Cookie',['mdsm=' + clientCookie]);
 				res.end('New client detected. You have been granted a cookie.');
-				// let clientCookie = newSesh.createClient(newClientInfo);
-				// let cookie = encrypt(JSON.stringify(plainTextCookie));
-				// res.setHeader('Set-Cookie',[
-				// 	`mdsm=${cookie};`,
-				// 	// `mdsm=${cookie}; HttpOnly; Max-Age=120`,
-				// 	// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; HttpOnly; Max-Age=60`,
-				// 	// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
-				// 	]
-				// );
+			}
+
+			else if(error.errorCode === 1){
+				res.setHeader('Set-Cookie',[
+					`mdsm=; HttpOnly; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
+					// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; HttpOnly; Max-Age=60`,
+					// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
+					]
+				);
+				res.end('MDSM cookie was valid, but session does not exist. Your bad cookie has been expired.');
 			}
 
 			else if(error.errorCode === 3){
