@@ -7,6 +7,7 @@ class Session{
 		this.sessionID = newSessionInfo.sessionID;
 		this.expiryDate = newSessionInfo.expiryDate;
 		this.clientList = [];
+		this.validEndpoints = newSessionInfo.validEndpoints;
 		this.sessionData = newSessionInfo.sessionData;
 
 		/* Create a unique session secret for crypto services */
@@ -15,13 +16,17 @@ class Session{
 
 	/* Add a client */
 	addClient(newClientData){
+		// console.log('Creating new client with clientData:');
+		// console.log(newClientData);
 		// let newClient = new Client(crypto.randomFillSync(Buffer.alloc(32), 0, 32).toString('hex'));
 		let newClient = new Client({
 			clientID: crypto.randomFillSync(Buffer.alloc(32), 0, 32).toString('hex'),
-			clientClass: newClientData.newClientClass,
+			clientClass: newClientData.clientClass,
 			clientData: newClientData.clientData,
-			parentSession: this
 		});
+
+		// console.log('Created new client:');
+		// console.log(newClient);
 
 		this.clientList.push(newClient);
 
@@ -51,12 +56,14 @@ class Session{
 			return c.clientID === JSON.parse(mdsmCookie).clientID;
 		})[0];
 
-		console.log(client);
-		/* TODO:
-				* Get the endpoint from req
-				* Determine whether the client has privileges for that endpoint based on its class
-				* If it does, run the callback for that endpoint, passing in the client data and session data
-		*/
+		let endpoint = this.validEndpoints.filter((ep)=>{
+			return ep.url === this.trimURL(req.url);
+		})[0];
+
+		if(endpoint.allowedClassTypes.includes(client.clientClass)){
+			endpoint.handler(this.sessionData,client.clientData,req,res,mdsmCookie);
+		}
+
 		res.end(`Your session is ${this.sessionID}. Your MDSM cookie is ${mdsmCookie}`);
 	}
 
@@ -85,6 +92,18 @@ class Session{
 
 		/* Otherwise, return false to indicate that the session should not be deleted yet */
 		else return false;
+	}
+
+	/* If the URL starts or begins with slashes, trims it to remove them. */
+	trimURL(url){
+		let trimmedUrl = url;
+		if(trimmedUrl.charAt(0) === '/'){
+			trimmedUrl = trimmedUrl.substring(1,trimmedUrl.length);
+		}
+		if(trimmedUrl.charAt(trimmedUrl.length - 1) === '/'){
+			trimmedUrl = trimmedUrl.substring(0,trimmedUrl.length - 1);
+		}
+		return trimmedUrl;
 	}
 
 	encrypt(data){

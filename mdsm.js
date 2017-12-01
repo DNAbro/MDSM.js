@@ -2,7 +2,6 @@ const http = require("http");
 const https = require("https");
 const crypto = require('crypto');
 
-const ClientClass = require("./Classes/ClientClass.js");
 const Session = require("./Classes/Session.js");
 
 let mdsm = function(){
@@ -13,6 +12,9 @@ let mdsm = function(){
 		/* For crypto services */
 		secret: crypto.randomFillSync(Buffer.alloc(256), 0, 256).toString('base64'),
 	};
+
+	let sessions = [];			// Will be populated with sessions as they are initialized
+	let endpoints = [];			// Will contain a list of valid endpoints
 
 	/* Initializes an instance of MDSM in either 'Port' mode (which listens for requests
 	 * on a specified port) or "Middleware" mode, which allows the processRequest function
@@ -27,15 +29,153 @@ let mdsm = function(){
 		else if(initConfig.mode === 'Middleware'){
 			MDSM_CONFIG.mode = 'Middleware';			// Declare the mode to 'Port'
 		}
+
+		/* Save the list of valid endpoint-allowedClassType-handler objects, but first trims
+		 * the url so that it's uniform */
+		endpoints = initConfig.endpoints.map((endpoint)=>{
+			endpoint.url = trimURL(endpoint.url);
+			return endpoint;
+		});
 	}
 
-	let sessions = [];			// Will be populated with sessions as they are initialized
+	let requestListener = function(req,res,next){
+		processRequest(req,res,next);
+	}
 
-	let clientClasses = [];		// Will contain a list of valid client classes
+	/* Listens for requests on a specified port. See documentation for "config" schema */
+	let listen = function(config){
+		/* If HTTPS settings were specified, configure an HTTPS server. */
+		if(config.https){
+			/* Use the key, certificate, and (optional) passphrase and ca fields passed in */
+			try{
+				let server = https.createServer({
+					'key': config.https.key,
+					'cert': config.https.cert,
+					'passphrase': config.https.passphrase,
+					'ca': config.https.ca
+				},requestListener);
+				server.listen({
+					'port': MDSM_CONFIG.port,
+					'host': '0.0.0.0',
+				});
+				console.log('MDSM Listening for HTTPS on port ' + MDSM_CONFIG.port);
+			} catch(error){
+				console.log('MDSM error: Failed to initialize HTTPS server. Double check the configurations.');
+				console.log(error.stack);
+			}
+		}
+		/* If no HTTPS settings were specified, default to an HTTP server. */
+		else {
+			try{
+				let server = http.createServer(requestListener);
+				server.listen({
+					'port': MDSM_CONFIG.port,
+					'host': '0.0.0.0',
+				});
+				console.log('MDSM Listening for HTTP on port ' + MDSM_CONFIG.port);
+			} catch(error){
+				console.log('MDSM error: Failed to initialize HTTP server');
+			}
+		}
+	}
 
-	let endpoints = [];			// Will contain a list of valid endpoints
+	let processRequestAsMiddleware = function(req,res,next){
+		if(MDSM_CONFIG.mode != 'Middleware'){
+			next({
+				errorCode: 2,	// Error code 2: Invalid MDSM cookie
+				errorText: 'MDSM Error: processRequest() unavailable in Port mode.\
+				 				Use Middleware mode, or route requests directly to the \
+								port specified on initialization.',
+			});
+		} else {
+			processRequest(req,res,next);
+		}
+	}
+	/* Process an incoming request. This function may be called by the request listener,
+	 * if listening on a port, or manually through the external API. */
+	let processRequest = function(req,res,next){
+		// console.log('================= Parsing new request =====================');
+		// console.log('Status of sessions array:');
+		// console.log(sessions);
 
+		let reqUrl = trimURL(req.url);	//Get a trimmed version of the URL
+		// console.log('Processing request to ' + trimURL(req.url));
 
+		/* check whether the request was for a valid endpoint URL. If it wasn't, call the
+		 * error callback.*/
+		if(!(isValidEndpoint(reqUrl))){
+			next({
+				errorCode: 3,	// Error code 3: Invalid endpoint URL
+				errorText: 'Invalid endpoint'
+			});
+		}
+		/* If the request was for a valid URL, continue processing the request */
+		else {
+			// console.log('Getting cookie list.');
+
+			/* Get an object containing cookie-value pairs */
+			let cookieList = getCookieListFromReq(req);
+
+			// console.log('Cookie list: ');
+			// console.log(cookieList);
+
+			/* If the request has an MDSM cookie */
+			if(cookieList['mdsm']){
+				/* Try and get the session associated with the cookie */
+				let match = findSession(cookieList['mdsm']);
+
+				/* If the session is valid, pass it to the session and let if figure out what to do.*/
+				if(match){
+					// console.log(matchingSession.sessionID);
+					// let sessID = matchingSession.sessionID;
+					// res.end('Hello, person from session with session ID ' + sessID);
+					match.session.processRequest(req,res,match.mdsmCookie,next);
+				}
+
+				/* If the session is invalid, expire the bad cookie and pass an error to the caller through the next() callback */
+				else {
+					next({
+						errorCode: 1,	// Error code 1: Invalid MDSM cookie
+						errorText: 'MDSM Error: Invalid MDSM cookie',
+					});
+					res.setHeader('Set-Cookie',[
+						`mdsm=; HttpOnly; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
+						// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; HttpOnly; Max-Age=60`,
+						// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
+						]
+					);
+					res.end('MDSM cookie was valid, but session does not exist. Your bad cookie has been expired.');
+				}
+			}
+
+			/* If the request does not have an MDSM cookie, ignore it and let the caller figure out what to do next.*/
+			else {
+				/* If on port mode, send an HTTP 400 response */
+				if(MDSM_CONFIG.mode === 'Port'){
+					res.statusCode = 400;
+					res.end("Not an MDSM request");
+				}
+				/* If on Middleware mode, call the callback with an error code of 0, signaling that this was
+				 * a request without an MDSM cookie */
+				else {
+					next({
+						errorCode: 0,	// Error code 0: No MDSM cookie
+						errorText: 'Not an MDSM request (no MDSM cookie)'
+					});
+				}
+			}
+		}
+	}
+
+	/* Checks the list of endpoints to see whether a given URL pertains to a valid endpoint */
+	function isValidEndpoint(url){
+		/* Get a subset of the endpoints array for which the url matches the given url */
+		let matchingEndpoints = endpoints.filter((ep)=>{
+			return ep.url === url;
+		});
+
+		return (matchingEndpoints.length != 0);
+	}
 
 	/* Takes an HTTP request object and returns a list of its cookies */
 	function getCookieListFromReq(request) {
@@ -100,121 +240,6 @@ let mdsm = function(){
 		return null;
 	}
 
-	let requestListener = function(req,res,next){
-		processRequest(req,res,next);
-	}
-
-	/* Listens for requests on a specified port. See documentation for "config" schema */
-	let listen = function(config){
-		/* If HTTPS settings were specified, configure an HTTPS server. */
-		if(config.https){
-			/* Use the key, certificate, and (optional) passphrase and ca fields passed in */
-			try{
-				let server = https.createServer({
-					'key': config.https.key,
-					'cert': config.https.cert,
-					'passphrase': config.https.passphrase,
-					'ca': config.https.ca
-				},requestListener);
-				server.listen({
-					'port': MDSM_CONFIG.port,
-					'host': '0.0.0.0',
-				});
-				console.log('MDSM Listening for HTTPS on port ' + MDSM_CONFIG.port);
-			} catch(error){
-				console.log('MDSM error: Failed to initialize HTTPS server. Double check the configurations.');
-				console.log(error.stack);
-			}
-		}
-		/* If no HTTPS settings were specified, default to an HTTP server. */
-		else {
-			try{
-				let server = http.createServer(requestListener);
-				server.listen({
-					'port': MDSM_CONFIG.port,
-					'host': '0.0.0.0',
-				});
-				console.log('MDSM Listening for HTTP on port ' + MDSM_CONFIG.port);
-			} catch(error){
-				console.log('MDSM error: Failed to initialize HTTP server');
-			}
-		}
-	}
-
-	let processRequestAsMiddleware = function(req,res,next){
-		if(MDSM_CONFIG.mode != 'Middleware'){
-			next({
-				errorCode: 2,	// Error code 2: Invalid MDSM cookie
-				errorText: 'MDSM Error: processRequest() unavailable in Port mode.\
-				 				Use Middleware mode, or route requests directly to the \
-								port specified on initialization.',
-			});
-		} else {
-			processRequest(req,res,next);
-		}
-	}
-	/* Process an incoming request. This function may be called by the request listener,
-	 * if listening on a port, or manually through the external API. */
-	let processRequest = function(req,res,next){
-		// console.log('================= Parsing new request =====================');
-		// console.log('Status of sessions array:');
-		// console.log(sessions);
-
-		// console.log('Getting cookie list.');
-
-		/* Get an object containing cookie-value pairs */
-		let cookieList = getCookieListFromReq(req);
-
-		// console.log('Cookie list: ');
-		// console.log(cookieList);
-
-		/* If the request has an MDSM cookie */
-		if(cookieList['mdsm']){
-			/* Try and get the session associated with the cookie */
-			let match = findSession(cookieList['mdsm']);
-
-			/* If the session is valid, pass it to the session and let if figure out what to do.*/
-			if(match){
-				// console.log(matchingSession.sessionID);
-				// let sessID = matchingSession.sessionID;
-				// res.end('Hello, person from session with session ID ' + sessID);
-				match.session.processRequest(req,res,match.mdsmCookie,next);
-			}
-
-			/* If the session is invalid, expire the bad cookie and pass an error to the caller through the next() callback */
-			else {
-				next({
-					errorCode: 1,	// Error code 1: Invalid MDSM cookie
-					errorText: 'MDSM Error: Invalid MDSM cookie',
-				});
-				res.setHeader('Set-Cookie',[
-					`mdsm=; HttpOnly; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
-					// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; HttpOnly; Max-Age=60`,
-					// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
-					]
-				);
-				res.end('MDSM cookie was valid, but session does not exist. Your bad cookie has been expired.');
-			}
-		}
-
-		/* If the request does not have an MDSM cookie, ignore it and let the caller figure out what to do next.*/
-		else {
-			/* If on port mode, send an HTTP 400 response */
-			if(MDSM_CONFIG.mode === 'Port'){
-				res.statusCode = 400;
-				res.end("Not an MDSM request");
-			}
-			/* If on Middleware mode, call the callback with an error code of 0, signaling that this was
-			 * a request without an MDSM cookie */
-			else {
-				next({
-					errorCode: 0,	// Error code 0: No MDSM cookie
-					errorText: 'Not an MDSM request (no MDSM cookie)'
-				});
-			}
-		}
-	}
-
 	/* Create a session using a configuration object:
 			{
 				"title" : "newSessionInfo",
@@ -260,6 +285,7 @@ let mdsm = function(){
 			sessionID: newSessionInfo.sessionID,
 			expiryDate: Date.now() + newSessionInfo.timeToLive,
 			sessionData: newSessionInfo.sessionData,
+			validEndpoints: endpoints,
 		});
 
 		// console.log('New session was successfully created:');
@@ -319,45 +345,6 @@ let mdsm = function(){
 		session.extendSessionLife(extraTimeInMs);
 	}
 
-	/* Attempts to create a new clientClass. If the ClientClass already exists, doesn't
-	 * create it, and returns the existing client class. */
-	let createClientClass = function(clientClassInfo){
-		// console.log('Trying to create new class \'' + clientClassInfo.classID + '\'');
-		// console.log(`clientClasses before: `);
-		// console.log(clientClasses);
-
-		let clientClassID = clientClassInfo.classID;
-		let matchingClientClasses = clientClasses.filter((clientClass)=>{
-			return clientClass.classID === clientClassID;
-		});
-
-		if(matchingClientClasses.length != 0){
-			// console.log('Client class already exists!');
-			// console.log(`clientClasses after: `);
-			// console.log(clientClasses);
-			return matchingClientClasses[0];
-		} else {
-			let newClientClass = new ClientClass(clientClassID);
-			clientClasses.push(newClientClass);
-			// console.log(`clientClasses after: `);
-			// console.log(clientClasses);
-			return newClientClass;
-		}
-	}
-
-	let removeClientClass = function(clientClassID){
-		// console.log(`clientClasses before:`);
-		// console.log(clientClasses);
-		for(clientClass in clientClasses){
-			if (clientClass.classID === clientClassID){
-				clientClasses.splice(clientClasses.indexOf(clientClass),1);
-				//Delete 1 object at the index of the clientClass
-			}
-		}
-		// console.log(`clientClasses after:`);
-		// console.log(clientClasses);
-	}
-
 	/* Add a client based on info passed in */
 	let addClient = function(newClientInfo){
 		/* get the session from the newClientinfo */
@@ -373,27 +360,14 @@ let mdsm = function(){
 		return encrypt(clientCookie);
 	}
 
-	/* Create a new endpoint */
-	let addEndpoint = function(newEndpointInfo){
-		console.log(`Adding new endpoint:`);
-		console.log(newEndpointInfo);
-		/* Trim the URL to ensure uniformity, then add it to the endpoints list. */
-		endpoints.push('/' + trimURL(newEndpointInfo.url) + '/');
-
-		/* If the client class doesn't exist, create it and add it to the list. */
-		if(!(clientClasses.includes(newEndpointInfo.allowedClassTypes))){
-			clientClasses.push(newEndpointInfo.allowedClassTypes);
-		}
-	}
-
 	/* If the URL starts or begins with slashes, trims it to remove them. */
 	function trimURL(url){
 		let trimmedUrl = url;
-		if(url.charAt(0) === '/'){
-			trimmedUrl = url.substring(1);
+		if(trimmedUrl.charAt(0) === '/'){
+			trimmedUrl = trimmedUrl.substring(1,trimmedUrl.length);
 		}
-		if(url.charAt(url.length - 1) === '/'){
-			trimmedUrl = url.substring(0,url.length - 1);
+		if(trimmedUrl.charAt(trimmedUrl.length - 1) === '/'){
+			trimmedUrl = trimmedUrl.substring(0,trimmedUrl.length - 1);
 		}
 		return trimmedUrl;
 	}
@@ -427,9 +401,7 @@ let mdsm = function(){
 		init: init,
 		createSession: createSession,
 		renewSession: renewSession,
-		createClientClass: createClientClass,
 		addClient: addClient,
-		addEndpoint: addEndpoint,
 
 		/* If in middleware mode, expose the processRequest function. */
 		processRequest: processRequestAsMiddleware,

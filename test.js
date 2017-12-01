@@ -14,15 +14,30 @@ const http = require("http");
 
 mdsm.init({
 	mode: 'Middleware',
+	endpoints: [
+		{
+			url: '/api/doSomething1/',
+			allowedClassTypes: ['class_A'],
+			handler: function(sessionData,clientData,request,response,mdsmCookie){
+				console.log('Handling doSomething1');
+			}
+		},
+		{
+			url: '/api/doSomething2/',
+			allowedClassTypes: ['class_B'],
+			handler: function(sessionData,clientData,request,response,mdsmCookie){
+				console.log('Handling doSomething2');
+			}
+		},
+	],
 });
 
-// console.log(mdsm);
 
 let processRequest = function(req,res){
 	mdsm.processRequest(
 		req,res,
 		(error)=>{
-			// console.log(error);
+			console.log(error);
 
 			/* If there was no MDSM cookie in the request */
 			if(error.errorCode === 0){
@@ -31,18 +46,15 @@ let processRequest = function(req,res){
 					timeToLive: 10000,	// 10 second session length
 				};
 				let newSesh = mdsm.createSession(newSessionInfo);
-				let clientClassA = mdsm.createClientClass({
-					classID: 'class_A'
-				});
 
 				let clientCookie = mdsm.addClient({
 					session: newSesh,
-					clientClass: clientClassA,
+					clientClass: 'class_A',
 					clientData: {'foo':'bar'},
 				});
 
 				res.setHeader('Set-Cookie',['mdsm=' + clientCookie]);
-				res.end('yo');
+				res.end('New client detected. You have been granted a cookie.');
 				// let clientCookie = newSesh.createClient(newClientInfo);
 				// let cookie = encrypt(JSON.stringify(plainTextCookie));
 				// res.setHeader('Set-Cookie',[
@@ -52,6 +64,11 @@ let processRequest = function(req,res){
 				// 	// `data:59e112e318259d1e5797741c5448971bd108de1f1981a8c048abfedba67a3154=butt; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`,
 				// 	]
 				// );
+			}
+
+			else if(error.errorCode === 3){
+				res.statusCode = (404);
+				res.end('Invalid URL');
 			}
 		}
 	);
