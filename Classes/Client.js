@@ -1,8 +1,9 @@
 class Client{
-	constructor(clientID, clientClass, parentSession){
-		this.clientID = clientID;
-		this.clientClass = clientClass;
-		this.parentSession = parentSession;
+	constructor(newClientInfo){
+		this.clientID = newClientInfo.clientID;
+		this.clientClass = newClientInfo.clientClass;
+		this.clientData = newClientInfo.clientData;
+		this.parentSession = newClientInfo.parentSession;
 	}
 }
 
